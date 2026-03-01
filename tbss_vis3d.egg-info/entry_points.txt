@@ -1,0 +1,2 @@
+[console_scripts]
+tbss-vis3d = tbss_vis3d.__main__:main

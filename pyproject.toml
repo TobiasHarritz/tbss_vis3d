@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tbss_vis3d"
+version = "0.1.0"
+description = "Simple 3D TBSS visualization helper"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [{name = "Your Name"}]
+
+dependencies = [
+  "numpy>=1.23",
+  "nibabel>=5.1",
+  "nilearn>=0.10",
+  "pyvista>=0.43",
+]
+
+[project.scripts]
+tbss-vis3d = "tbss_vis3d.__main__:main"

@@ -1,0 +1,4 @@
+numpy>=1.23
+nibabel>=5.1
+nilearn>=0.10
+pyvista>=0.43

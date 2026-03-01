@@ -1,0 +1,11 @@
+README.md
+pyproject.toml
+tbss_vis3d/__init__.py
+tbss_vis3d/__main__.py
+tbss_vis3d/render.py
+tbss_vis3d.egg-info/PKG-INFO
+tbss_vis3d.egg-info/SOURCES.txt
+tbss_vis3d.egg-info/dependency_links.txt
+tbss_vis3d.egg-info/entry_points.txt
+tbss_vis3d.egg-info/requires.txt
+tbss_vis3d.egg-info/top_level.txt
