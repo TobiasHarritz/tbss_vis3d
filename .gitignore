@@ -1,0 +1,18 @@
+# Python build artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+*.dylib
+
+# Packaging
+*.egg-info/
+/dist/
+/build/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
