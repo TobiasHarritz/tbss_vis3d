@@ -1,29 +1,53 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Callable, Dict, Iterable, List, Optional
 
 import numpy as np
+
+
+class ViewProxy:
+    def __init__(self, result: "RenderResult", name: str):
+        self._result = result
+        self._name = name
+
+    def __call__(self, zoom: Optional[float] = None) -> np.ndarray:
+        return self._result.view(self._name, zoom=zoom)
+
+    def __array__(self, dtype=None):
+        arr = self._result.view(self._name)
+        return np.asarray(arr, dtype=dtype) if dtype is not None else np.asarray(arr)
+
+    def __getattr__(self, attr):
+        return getattr(self._result.view(self._name), attr)
 
 
 @dataclass
 class RenderResult:
     views: Dict[str, np.ndarray]
+    renderer: Optional[Callable[[str, Optional[float]], np.ndarray]] = None
+
+    def view(self, name: str, zoom: Optional[float] = None) -> np.ndarray:
+        if zoom is None:
+            return self.views[name]
+        if self.renderer is None:
+            raise ValueError("Per-view zoom is only available for in-memory renders.")
+        return self.renderer(name, zoom)
 
     @property
     def top(self):
-        return self.views.get("top")
+        return ViewProxy(self, "top")
 
     @property
     def side(self):
-        return self.views.get("side")
+        return ViewProxy(self, "side")
 
     @property
     def iso(self):
-        return self.views.get("iso")
+        return ViewProxy(self, "iso")
 
     def __getitem__(self, key: str):
-        return self.views[key]
+        return self.view(key)
 
 
 def _split_views(view: str) -> List[str]:
@@ -246,7 +270,15 @@ def render(
         scalars_data = stat_data
     stat_grid.point_data["scalars"] = scalars_data.ravel(order="F")
     masked_vals = scalars_data[mask > 0.5]
-    clim = (float(masked_vals.min()), float(masked_vals.max())) if masked_vals.size else None
+    if mode == "lt":
+        # Fixed p-scale: threshold value maps to the low end of the colormap and
+        # p=0 maps to the high end, so colors stay comparable across figures.
+        clim = (-float(stat_thr), 0.0)
+    elif mode == "gt" and 0.0 <= float(stat_thr) <= 1.0:
+        # For corrp-style 1-p maps, keep a fixed significance scale as well.
+        clim = (float(stat_thr), 1.0)
+    else:
+        clim = (float(masked_vals.min()), float(masked_vals.max())) if masked_vals.size else None
 
     brain_surf = _brain_surface(tpl_grid, tpl_data, bg_percentile, bg_smooth_iters)
 
@@ -263,7 +295,13 @@ def render(
     outputs: List[str] = []
     images: Dict[str, np.ndarray] = {}
     style = (style or "voxels").lower()
-    for v in _split_views(view):
+
+    def _render_single_view(
+        v: str,
+        zoom_override: Optional[float] = None,
+        out_path: Optional[str] = None,
+    ) -> Optional[np.ndarray]:
+        view_zoom = zoom if zoom_override is None else zoom_override
         plotter = pv.Plotter(off_screen=True, window_size=window_size)
         plotter.set_background("white")
         plotter.enable_anti_aliasing()
@@ -361,7 +399,7 @@ def render(
         # Frame from the template volume rather than the extracted shell so camera
         # distance stays stable across different background intensities/templates.
         bounds = tpl_grid.bounds if tpl_grid is not None else stat_surf.bounds
-        plotter.camera_position = _camera_for_view(v, bounds, zoom=zoom)
+        plotter.camera_position = _camera_for_view(v, bounds, zoom=view_zoom)
         if v in {"top", "side"}:
             # Use orthographic projection for anatomical overview views so framing
             # does not depend on perspective/FOV and stays consistent across spaces.
@@ -370,19 +408,26 @@ def render(
                 (bounds[1] - bounds[0]) * 0.6,
                 (bounds[3] - bounds[2]) * 0.6,
                 (bounds[5] - bounds[4]) * 0.6,
-            ) / max(float(zoom), 1e-3)
+            ) / max(float(view_zoom), 1e-3)
 
         if labels and v == "top":
             plotter.add_text("L", position="lower_left", font_size=label_size, color=label_color)
             plotter.add_text("R", position="lower_right", font_size=label_size, color=label_color)
 
+        if out_path is not None:
+            plotter.show(screenshot=out_path, auto_close=True)
+            return None
+
+        img = plotter.screenshot(transparent_background=False, return_img=True)
+        plotter.close()
+        return img
+
+    for v in _split_views(view):
         if save:
             out_path = str(Path(out_dir) / f"{stem}_{v}.png")
-            plotter.show(screenshot=out_path, auto_close=True)
+            _render_single_view(v, out_path=out_path)
             outputs.append(out_path)
         else:
-            img = plotter.screenshot(transparent_background=False, return_img=True)
-            plotter.close()
-            images[v] = img
+            images[v] = _render_single_view(v)
 
-    return outputs if save else RenderResult(images)
+    return outputs if save else RenderResult(images, renderer=_render_single_view)

@@ -16,6 +16,12 @@ from tbss_vis3d import render; r = render(
     template_path="/Users/tobiasharritz/data/tbss_example/ExBox7/mean_FA.nii.gz",  # optional; defaults to MNI152
     zoom=1.15,
 )
+
+# Default cached view
+img = r.iso
+
+# Re-render just one view with a different zoom
+img = r.iso(zoom=1.3)
 ```
 
 ## CLI
@@ -44,6 +50,7 @@ Use `--view all` (default) or a comma list such as `--view top,side,iso`.
 - Default `style="voxels"` to show filled voxel cubes. Use `style="surface"` for a continuous mesh or `style="points"` for a sparse cloud.
 - Default colormap is `autumn` (red→yellow). Use `cmap="hot"` or any matplotlib colormap name.
 - Use `zoom` / `--zoom` to adjust framing. Values `>1` zoom in; values `<1` zoom out.
+- For in-memory results, you can also override zoom per view with `r.iso(zoom=...)`, `r.top(zoom=...)`, or `r.side(zoom=...)`.
 - L/R labels are on by default; disable with `--no-labels`.
 - For a cleaner visualization (like FSLeyes “filled” display), you can pass the filled map:
   `tbss_clustere_corrp_tstat1_filled.nii.gz` (visualization only; skeleton is the valid result).
