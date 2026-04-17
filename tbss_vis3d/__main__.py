@@ -27,6 +27,7 @@ def main():
     p.add_argument("--color", default="#c62828", help="Cluster color")
     p.add_argument("--opacity", type=float, default=0.85, help="Cluster opacity")
     p.add_argument("--bg-opacity", type=float, default=0.15, help="Template opacity")
+    p.add_argument("--zoom", type=float, default=1.0, help="Camera zoom factor (>1 zooms in, <1 zooms out)")
     args = p.parse_args()
 
     render(
@@ -53,6 +54,7 @@ def main():
         color=args.color,
         opacity=args.opacity,
         bg_opacity=args.bg_opacity,
+        zoom=args.zoom,
     )
 
 

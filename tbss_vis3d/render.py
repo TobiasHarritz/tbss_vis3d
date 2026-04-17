@@ -70,7 +70,14 @@ def _to_uniform_grid(img):
     return grid, data
 
 
+def _voxel_world_points(img, ijk: np.ndarray) -> np.ndarray:
+    import nibabel as nib
+
+    return np.asarray(nib.affines.apply_affine(img.affine, ijk), dtype=np.float32)
+
+
 def _infer_threshold_and_mode(
+    stat_path: str,
     stat_data: np.ndarray,
     thr: Optional[float],
     thr_percentile: Optional[float],
@@ -87,12 +94,21 @@ def _infer_threshold_and_mode(
 
     vmin = float(finite.min())
     vmax = float(finite.max())
+    stat_name = Path(stat_path).name.lower()
+
+    # Randomise/TBSS corrp maps encode significance as 1-p, so higher values
+    # are more significant. Use the filename when available because value-only
+    # heuristics are unreliable for dense TFCE corrp images.
+    if mode == "auto" and "corrp" in stat_name:
+        return float(corrp_thr), "gt"
 
     # Heuristic for TBSS corrp maps (1-p):
     # values in [0,1] with a sparse high tail (e.g., many zeros, few ~0.95).
     if mode == "auto" and vmin >= 0.0 and vmax <= 1.5:
+        p95 = float(np.percentile(finite, 95.0))
         p99 = float(np.percentile(finite, 99.0))
-        if p99 == 0.0 and vmax >= 0.9:
+        frac_hi = float(np.mean(finite >= corrp_thr))
+        if vmax >= 0.9 and (p99 >= 0.9 or p95 >= 0.8 or frac_hi < 0.1):
             return float(corrp_thr), "gt"
         if p99 == 0.0 and vmax > 0.0:
             # sparse nonzero maps (e.g., filled clusters) -> keep any nonzero voxel
@@ -149,13 +165,14 @@ def _brain_surface(tpl_grid, tpl_data: np.ndarray, bg_percentile: float, smooth_
     return None
 
 
-def _camera_for_view(view: str, bounds):
+def _camera_for_view(view: str, bounds, zoom: float = 1.0):
     xmin, xmax, ymin, ymax, zmin, zmax = bounds
     cx = 0.5 * (xmin + xmax)
     cy = 0.5 * (ymin + ymax)
     cz = 0.5 * (zmin + zmax)
     span = max(xmax - xmin, ymax - ymin, zmax - zmin)
-    dist = span * 2.1
+    zoom = max(float(zoom), 1e-3)
+    dist = (span * 2.8) / zoom
 
     view = view.lower()
     if view == "top":
@@ -193,6 +210,7 @@ def render(
     cmap: str = "autumn",
     opacity: float = 0.85,
     bg_opacity: float = 0.15,
+    zoom: float = 1.0,
     point_size: float = 3.0,
     point_stride: int = 1,
     max_points: Optional[int] = 200000,
@@ -215,7 +233,7 @@ def render(
     stat_grid, stat_data = _to_uniform_grid(stat_img)
     tpl_grid, tpl_data = _to_uniform_grid(template_img)
 
-    stat_thr, mode = _infer_threshold_and_mode(stat_data, thr, thr_percentile, mode, p_thr, corrp_thr)
+    stat_thr, mode = _infer_threshold_and_mode(stat_path, stat_data, thr, thr_percentile, mode, p_thr, corrp_thr)
     # Extract surfaces
     mask = _mask_from_threshold(stat_data, stat_thr, mode).astype(np.float32)
     stat_grid.point_data["mask"] = mask.ravel(order="F")
@@ -288,9 +306,7 @@ def render(
                 step = max(1, int(np.ceil(ijk.shape[0] / max_points)))
                 ijk = ijk[::step]
 
-            spacing = np.array(stat_img.header.get_zooms()[:3], dtype=np.float32)
-            origin = np.array(stat_img.affine[:3, 3], dtype=np.float32)
-            points = origin + ijk.astype(np.float32) * spacing[None, :]
+            points = _voxel_world_points(stat_img, ijk)
             scalars = scalars_data[ijk[:, 0], ijk[:, 1], ijk[:, 2]]
 
             cloud = pv.PolyData(points)
@@ -320,8 +336,7 @@ def render(
                 ijk = ijk[::step]
 
             spacing = np.array(stat_img.header.get_zooms()[:3], dtype=np.float32)
-            origin = np.array(stat_img.affine[:3, 3], dtype=np.float32)
-            points = origin + ijk.astype(np.float32) * spacing[None, :]
+            points = _voxel_world_points(stat_img, ijk)
             scalars = scalars_data[ijk[:, 0], ijk[:, 1], ijk[:, 2]]
 
             cube = pv.Cube(
@@ -343,8 +358,19 @@ def render(
                 show_scalar_bar=False,
             )
 
-        bounds = brain_surf.bounds if brain_surf is not None else stat_surf.bounds
-        plotter.camera_position = _camera_for_view(v, bounds)
+        # Frame from the template volume rather than the extracted shell so camera
+        # distance stays stable across different background intensities/templates.
+        bounds = tpl_grid.bounds if tpl_grid is not None else stat_surf.bounds
+        plotter.camera_position = _camera_for_view(v, bounds, zoom=zoom)
+        if v in {"top", "side"}:
+            # Use orthographic projection for anatomical overview views so framing
+            # does not depend on perspective/FOV and stays consistent across spaces.
+            plotter.camera.parallel_projection = True
+            plotter.camera.parallel_scale = max(
+                (bounds[1] - bounds[0]) * 0.6,
+                (bounds[3] - bounds[2]) * 0.6,
+                (bounds[5] - bounds[4]) * 0.6,
+            ) / max(float(zoom), 1e-3)
 
         if labels and v == "top":
             plotter.add_text("L", position="lower_left", font_size=label_size, color=label_color)
