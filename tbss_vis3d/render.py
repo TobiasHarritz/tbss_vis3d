@@ -100,6 +100,90 @@ def _voxel_world_points(img, ijk: np.ndarray) -> np.ndarray:
     return np.asarray(nib.affines.apply_affine(img.affine, ijk), dtype=np.float32)
 
 
+def _draw_top_labels(img: np.ndarray, label_size: int, label_color: str) -> np.ndarray:
+    try:
+        from PIL import Image, ImageColor, ImageDraw, ImageFont
+    except ImportError as exc:
+        raise ImportError("Radiological top-view labels require Pillow to be installed.") from exc
+
+    pil_img = Image.fromarray(img)
+    draw = ImageDraw.Draw(pil_img)
+    color = ImageColor.getrgb(label_color)
+    pixel_size = max(24, int(label_size * 2.6))
+    font = None
+    for font_name in ["DejaVuSans.ttf", "Arial.ttf", "Helvetica.ttf"]:
+        try:
+            font = ImageFont.truetype(font_name, pixel_size)
+            break
+        except Exception:
+            continue
+    if font is None:
+        font = ImageFont.load_default()
+
+    width, height = pil_img.size
+    margin = max(18, int(pixel_size * 0.45))
+    left_text = "R"
+    right_text = "L"
+
+    try:
+        left_width = draw.textlength(left_text, font=font)
+        right_width = draw.textlength(right_text, font=font)
+    except Exception:
+        left_width = label_size
+        right_width = label_size
+
+    try:
+        bbox = draw.textbbox((0, 0), left_text, font=font)
+        text_height = bbox[3] - bbox[1]
+    except Exception:
+        text_height = pixel_size
+
+    baseline_y = height - margin - text_height
+    draw.text((margin, baseline_y), left_text, fill=color, font=font)
+    draw.text((width - margin - right_width, baseline_y), right_text, fill=color, font=font)
+    return np.asarray(pil_img)
+
+
+def _recenter_image_content(img: np.ndarray, bg_rgb=(255, 255, 255)) -> np.ndarray:
+    data = np.asarray(img)
+    if data.ndim != 3 or data.shape[2] < 3:
+        return data
+
+    bg = np.array(bg_rgb, dtype=data.dtype)
+    mask = np.any(data[..., :3] != bg[None, None, :], axis=2)
+    coords = np.argwhere(mask)
+    if coords.size == 0:
+        return data
+
+    ymin, xmin = coords.min(axis=0)
+    ymax, xmax = coords.max(axis=0)
+    cy = 0.5 * (ymin + ymax)
+    cx = 0.5 * (xmin + xmax)
+    target_cy = (data.shape[0] - 1) / 2.0
+    target_cx = (data.shape[1] - 1) / 2.0
+    shift_y = int(round(target_cy - cy))
+    shift_x = int(round(target_cx - cx))
+
+    if shift_x == 0 and shift_y == 0:
+        return data
+
+    out = np.empty_like(data)
+    out[...] = 255
+
+    src_y0 = max(0, -shift_y)
+    src_y1 = min(data.shape[0], data.shape[0] - shift_y)
+    dst_y0 = max(0, shift_y)
+    dst_y1 = min(data.shape[0], data.shape[0] + shift_y)
+    src_x0 = max(0, -shift_x)
+    src_x1 = min(data.shape[1], data.shape[1] - shift_x)
+    dst_x0 = max(0, shift_x)
+    dst_x1 = min(data.shape[1], data.shape[1] + shift_x)
+
+    if src_y1 > src_y0 and src_x1 > src_x0:
+        out[dst_y0:dst_y1, dst_x0:dst_x1] = data[src_y0:src_y1, src_x0:src_x1]
+    return out
+
+
 def _infer_threshold_and_mode(
     stat_path: str,
     stat_data: np.ndarray,
@@ -410,16 +494,28 @@ def render(
                 (bounds[5] - bounds[4]) * 0.6,
             ) / max(float(view_zoom), 1e-3)
 
-        if labels and v == "top":
+        if labels and v == "side":
             plotter.add_text("L", position="lower_left", font_size=label_size, color=label_color)
             plotter.add_text("R", position="lower_right", font_size=label_size, color=label_color)
 
-        if out_path is not None:
-            plotter.show(screenshot=out_path, auto_close=True)
-            return None
-
         img = plotter.screenshot(transparent_background=False, return_img=True)
         plotter.close()
+        if v == "top":
+            # Radiological convention is a left-right mirror of the rendered top view.
+            img = np.fliplr(img)
+            if labels:
+                img = _draw_top_labels(img, label_size=label_size, label_color=label_color)
+        elif v == "iso":
+            img = _recenter_image_content(img)
+
+        if out_path is not None:
+            try:
+                from PIL import Image
+            except ImportError as exc:
+                raise ImportError("Saving flipped top-view images requires Pillow to be installed.") from exc
+            Image.fromarray(img).save(out_path)
+            return None
+
         return img
 
     for v in _split_views(view):
